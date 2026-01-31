@@ -64,18 +64,18 @@ Since there are no pre-compiled releases, follow these steps to build the instal
 
 2.  **Build the installer:**
     ```bash
-    go build -o tac-writer-installer
+    go build -o tac-installer
     ```
 
 3.  **Run the application:**
 
     ### Via Terminal
     ```bash
-    ./tac-writer-installer
+    ./tac-installer
     ```
 
     ### Via File Manager (GUI)
-    1. Right-click the file `tac-writer-installer`.
+    1. Right-click the file `tac-installer`.
     2. Go to **Properties** > **Permissions**.
     3. Check the box **"Allow executing file as program"** (or similar).
     4. **Double-click** the file to launch.
