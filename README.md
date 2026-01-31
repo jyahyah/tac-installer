@@ -58,7 +58,7 @@ Since there are no pre-compiled releases, follow these steps to build the instal
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/jyahyah/tac-installer.git](https://github.com/jyahyah/tac-installer.git)
+    git clone https://github.com/jyahyah/tac-installer.git
     cd tac-installer
     ```
 
