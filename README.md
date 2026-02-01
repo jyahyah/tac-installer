@@ -8,6 +8,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux-orange?style=flat&logo=linux)](https://www.kernel.org/)
 [![Language](https://img.shields.io/badge/Language-PT--BR-green)](https://en.wikipedia.org/wiki/Portuguese_language)
 [![License](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+![Downloads](https://img.shields.io/github/downloads/jyahyah/tac-installer/total?style=flat-square)
 
 A modern, lightweight graphical installer for [TAC Writer](https://github.com/narayanls/tac-writer), built with **Go** and **Zenity**. This tool simplifies the installation process for Linux users, automatically fetching the latest version of the software directly from the source.
 
