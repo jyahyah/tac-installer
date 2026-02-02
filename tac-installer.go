@@ -65,6 +65,9 @@ func getInstalledVersion() (string, error) {
 }
 
 func compareVersions(a, b string) int {
+	// Troca hífen por ponto para identificar versões corretamente
+	a = strings.ReplaceAll(a, "-", ".")
+	b = strings.ReplaceAll(b, "-", ".")
 	as := strings.Split(a, ".")
 	bs := strings.Split(b, ".")
 
