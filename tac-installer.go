@@ -65,7 +65,6 @@ func getInstalledVersion() (string, error) {
 }
 
 func compareVersions(a, b string) int {
-	// Troca hífen por ponto para identificar versões corretamente
 	a = strings.ReplaceAll(a, "-", ".")
 	b = strings.ReplaceAll(b, "-", ".")
 	as := strings.Split(a, ".")
@@ -96,6 +95,10 @@ func compareVersions(a, b string) int {
 }
 
 func checkIsInstalled() bool {
+	// Verifica primeiro se está no path (instalação via AUR geralmente coloca no bin)
+	if _, err := exec.LookPath("tac-writer"); err == nil {
+		return true
+	}
 	path := filepath.Join(AppInstallDir, "main.py")
 	_, err := os.Stat(path)
 	return err == nil
@@ -168,6 +171,129 @@ func formatDate(iso string) string {
 	return t.Format("02/01/2006")
 }
 
+// --- FUNÇÕES NOVAS PARA AUR ---
+
+func getTerminal() (string, string) {
+	// Lista de terminais comuns e seus argumentos de execução
+	terms := []struct {
+		cmd string
+		arg string
+	}{
+		{"gnome-terminal", "--"},
+		{"konsole", "-e"},
+		{"xfce4-terminal", "-e"},
+		{"mate-terminal", "-e"},
+		{"alacritty", "-e"},
+		{"kitty", "-e"},
+		{"xterm", "-e"},
+		{"tilix", "-e"},
+		{"ashyterm", "-e"},
+		{"zashterminal", "-e"},
+		{"terminator", "-x"},
+	}
+
+	for _, t := range terms {
+		if _, err := exec.LookPath(t.cmd); err == nil {
+			return t.cmd, t.arg
+		}
+	}
+	return "", ""
+}
+
+func installViaAUR(distro DistroInfo) {
+	msg := fmt.Sprintf("Sistema <b>Arch Linux</b> detectado.\n\nO <b>%s</b> será instalado diretamente do <b>AUR</b> para resolver as dependências automaticamente.\n\nIsso abrirá um terminal para compilação.\nDeseja continuar?", AppPrettyName)
+	
+	if !zenityQuestion(msg) {
+		os.Exit(0)
+	}
+
+	termCmd, termArg := getTerminal()
+	if termCmd == "" {
+		zenityError("Nenhum terminal compatível encontrado para executar a instalação do AUR.")
+		os.Exit(1)
+	}
+
+	// Cria o script temporário
+	tmpScript := filepath.Join(os.TempDir(), "install_tac_aur.sh")
+	
+	scriptContent := fmt.Sprintf(`#!/bin/bash
+echo "=== INSTALAÇÃO VIA AUR: %s ==="
+echo ""
+
+check_install() {
+    if pacman -Qi %s &> /dev/null; then
+        echo ""
+        echo ">>> SUCESSO! Pacote instalado."
+        echo "Pressione ENTER para fechar."
+        read
+        exit 0
+    else
+        echo ""
+        echo ">>> FALHA NA INSTALAÇÃO."
+        echo "Pressione ENTER para fechar."
+        read
+        exit 1
+    fi
+}
+
+# 1. Tenta usar YAY
+if command -v yay &> /dev/null; then
+    echo ">> Usando YAY..."
+    yay -S --noconfirm %s
+    check_install
+
+# 2. Tenta usar PARU
+elif command -v paru &> /dev/null; then
+    echo ">> Usando PARU..."
+    paru -S --noconfirm %s
+    check_install
+
+# 3. Fallback: Manual
+else
+    echo ">> Nenhum helper (yay/paru) encontrado. Instalando manualmente..."
+    echo ">> Instalando base-devel e git..."
+    sudo pacman -S --needed --noconfirm base-devel git
+    
+    BUILD_DIR="/tmp/%s-aur-build"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR" || exit 1
+    
+    echo ">> Clonando AUR..."
+    git clone "https://aur.archlinux.org/%s.git"
+    cd "%s" || exit 1
+    
+    echo ">> Compilando..."
+    makepkg -si --noconfirm
+    check_install
+fi
+`, AppName, AppName, AppName, AppName, AppName, AppName, AppName)
+
+	if err := os.WriteFile(tmpScript, []byte(scriptContent), 0755); err != nil {
+		zenityError("Erro ao criar script temporário: " + err.Error())
+		os.Exit(1)
+	}
+
+	// Executa o terminal com o script
+	// IMPORTANTE: Não usamos pkexec aqui, pois makepkg não pode rodar como root
+	cmd := exec.Command(termCmd, termArg, tmpScript)
+	if err := cmd.Run(); err != nil {
+		zenityError("Erro ao abrir o terminal: " + err.Error())
+	} else {
+		// O terminal fechou. Verificamos se instalou.
+		if checkIsInstalled() {
+			if zenityQuestionCustomTitle("Instalação do AUR finalizada.\nDeseja abrir agora?", "Sucesso") {
+				openApplication()
+			}
+		}
+	}
+	// Limpeza e saída
+	os.Remove(tmpScript)
+	os.Exit(0)
+}
+
+// --- FIM FUNÇÕES AUR ---
+
 func main() {
 	distro := getDistroInfo()
 	ensureZenity(distro)
@@ -181,6 +307,17 @@ func main() {
 
 		latest := strings.TrimPrefix(release.TagName, "v")
 		installed, err := getInstalledVersion()
+		
+		// Se não conseguiu ler o arquivo de versão local, tenta pegar do pacman se for Arch
+		if (installed == "" || err != nil) && strings.Contains(distro.ID, "arch") {
+			out, _ := exec.Command("pacman", "-Q", AppName).Output()
+			// Saída ex: tac-writer 1.2.8-2
+			parts := strings.Fields(string(out))
+			if len(parts) >= 2 {
+				installed = parts[1]
+				err = nil
+			}
+		}
 
 		needsUpdate := true
 		if err == nil && compareVersions(installed, latest) >= 0 {
@@ -232,8 +369,10 @@ INSTALL_FLOW:
 
 	switch {
 	case strings.Contains(distro.ID, "arch") || strings.Contains(distro.IDLike, "arch") || strings.Contains(distro.IDLike, "manjaro") || strings.Contains(distro.ID, "manjaro") || strings.Contains(distro.ID, "cachyos"):
-		suffix = ".pkg.tar.zst"
-		installCmd = "pacman -U --noconfirm"
+		// --- DESVIO PARA LÓGICA AUR ---
+		installViaAUR(distro)
+		return // Encerra aqui pois installViaAUR cuida de tudo
+		// -----------------------------
 
 	case strings.Contains(distro.ID, "debian") || strings.Contains(distro.IDLike, "debian") || strings.Contains(distro.ID, "ubuntu"):
 		suffix = ".deb"
