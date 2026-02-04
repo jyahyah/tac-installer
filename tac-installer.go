@@ -95,7 +95,6 @@ func compareVersions(a, b string) int {
 }
 
 func checkIsInstalled() bool {
-	// Verifica primeiro se está no path (instalação via AUR geralmente coloca no bin)
 	if _, err := exec.LookPath("tac-writer"); err == nil {
 		return true
 	}
@@ -171,10 +170,10 @@ func formatDate(iso string) string {
 	return t.Format("02/01/2006")
 }
 
-// --- FUNÇÕES NOVAS PARA AUR ---
+// --- UTILITÁRIOS GERAIS (TERMINAL E ZENITY) ---
 
 func getTerminal() (string, string) {
-	// Lista de terminais comuns e seus argumentos de execução
+	// Lista de terminais comuns
 	terms := []struct {
 		cmd string
 		arg string
@@ -200,7 +199,86 @@ func getTerminal() (string, string) {
 	return "", ""
 }
 
+func ensureZenity(d DistroInfo) {
+	// 1. Verifica se já existe
+	if _, err := exec.LookPath("zenity"); err == nil {
+		return
+	}
+
+	// 2. Se não existe, precisamos identificar o comando de instalação
+	var installCmd string
+	switch {
+	case strings.Contains(d.ID, "arch") || strings.Contains(d.IDLike, "arch") || strings.Contains(d.ID, "cachyos"):
+		installCmd = "sudo pacman -S --noconfirm zenity"
+	case strings.Contains(d.ID, "debian") || strings.Contains(d.IDLike, "debian") || strings.Contains(d.ID, "ubuntu"):
+		installCmd = "sudo apt-get update && sudo apt-get install -y zenity"
+	case strings.Contains(d.ID, "fedora") || strings.Contains(d.IDLike, "fedora"):
+		installCmd = "sudo dnf install -y zenity"
+	case strings.Contains(d.ID, "suse") || strings.Contains(d.IDLike, "suse"):
+		installCmd = "sudo zypper --non-interactive install -y zenity"
+	}
+
+	if installCmd == "" {
+		fmt.Println("Erro: Zenity não encontrado e distribuição desconhecida para instalação automática.")
+		os.Exit(1)
+	}
+
+	// 3. Obter terminal para rodar o comando interativamente
+	termCmd, termArg := getTerminal()
+	if termCmd == "" {
+		fmt.Println("Erro: Zenity não encontrado e nenhum terminal detectado para realizar a instalação.")
+		os.Exit(1)
+	}
+
+	// 4. Criar script temporário para rodar no terminal
+	tmpScript := filepath.Join(os.TempDir(), "install_zenity_dependency.sh")
+	scriptContent := fmt.Sprintf(`#!/bin/bash
+echo "=========================================="
+echo " O instalador gráfico requer o 'zenity'   "
+echo "=========================================="
+echo ""
+echo "O Zenity não foi encontrado no seu sistema."
+echo "Tentando instalar automaticamente..."
+echo "Comando: %s"
+echo ""
+%s
+
+EXIT_CODE=$?
+echo ""
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "Sucesso! O Zenity foi instalado."
+    echo "O instalador continuará em breve..."
+    sleep 2
+else
+    echo "Falha na instalação."
+    echo "Pressione ENTER para sair."
+    read
+fi
+exit $EXIT_CODE
+`, installCmd, installCmd)
+
+	if err := os.WriteFile(tmpScript, []byte(scriptContent), 0755); err != nil {
+		fmt.Println("Erro ao criar script de instalação do Zenity:", err)
+		os.Exit(1)
+	}
+	defer os.Remove(tmpScript)
+
+	// 5. Executa o terminal e espera terminar
+	cmd := exec.Command(termCmd, termArg, tmpScript)
+	cmd.Run() // Ignoramos erro do Run() pois o script trata a saída
+
+	// 6. Verificação final
+	if _, err := exec.LookPath("zenity"); err != nil {
+		fmt.Println("Zenity ainda não foi encontrado. A instalação falhou ou foi cancelada.")
+		os.Exit(1)
+	}
+	// Se chegou aqui, Zenity existe. O programa segue para o main.
+}
+
+// --- FUNÇÕES AUR ---
+
 func installViaAUR(distro DistroInfo) {
+	// AVISO: Aqui Zenity já é garantido pelo ensureZenity chamado no main
 	msg := fmt.Sprintf("Sistema <b>Arch Linux</b> detectado.\n\nO <b>%s</b> será instalado diretamente do <b>AUR</b> para resolver as dependências automaticamente.\n\nIsso abrirá um terminal para compilação.\nDeseja continuar?", AppPrettyName)
 	
 	if !zenityQuestion(msg) {
@@ -213,7 +291,6 @@ func installViaAUR(distro DistroInfo) {
 		os.Exit(1)
 	}
 
-	// Cria o script temporário
 	tmpScript := filepath.Join(os.TempDir(), "install_tac_aur.sh")
 	
 	scriptContent := fmt.Sprintf(`#!/bin/bash
@@ -274,28 +351,26 @@ fi
 		os.Exit(1)
 	}
 
-	// Executa o terminal com o script
-	// IMPORTANTE: Não usamos pkexec aqui, pois makepkg não pode rodar como root
 	cmd := exec.Command(termCmd, termArg, tmpScript)
 	if err := cmd.Run(); err != nil {
 		zenityError("Erro ao abrir o terminal: " + err.Error())
 	} else {
-		// O terminal fechou. Verificamos se instalou.
 		if checkIsInstalled() {
 			if zenityQuestionCustomTitle("Instalação do AUR finalizada.\nDeseja abrir agora?", "Sucesso") {
 				openApplication()
 			}
 		}
 	}
-	// Limpeza e saída
 	os.Remove(tmpScript)
 	os.Exit(0)
 }
 
-// --- FIM FUNÇÕES AUR ---
+// --- MAIN E OUTROS ---
 
 func main() {
 	distro := getDistroInfo()
+	
+	// AQUI: Garante Zenity antes de qualquer chamada gráfica
 	ensureZenity(distro)
 
 	if checkIsInstalled() {
@@ -308,10 +383,8 @@ func main() {
 		latest := strings.TrimPrefix(release.TagName, "v")
 		installed, err := getInstalledVersion()
 		
-		// Se não conseguiu ler o arquivo de versão local, tenta pegar do pacman se for Arch
 		if (installed == "" || err != nil) && strings.Contains(distro.ID, "arch") {
 			out, _ := exec.Command("pacman", "-Q", AppName).Output()
-			// Saída ex: tac-writer 1.2.8-2
 			parts := strings.Fields(string(out))
 			if len(parts) >= 2 {
 				installed = parts[1]
@@ -369,10 +442,8 @@ INSTALL_FLOW:
 
 	switch {
 	case strings.Contains(distro.ID, "arch") || strings.Contains(distro.IDLike, "arch") || strings.Contains(distro.IDLike, "manjaro") || strings.Contains(distro.ID, "manjaro") || strings.Contains(distro.ID, "cachyos"):
-		// --- DESVIO PARA LÓGICA AUR ---
 		installViaAUR(distro)
-		return // Encerra aqui pois installViaAUR cuida de tudo
-		// -----------------------------
+		return 
 
 	case strings.Contains(distro.ID, "debian") || strings.Contains(distro.IDLike, "debian") || strings.Contains(distro.ID, "ubuntu"):
 		suffix = ".deb"
@@ -389,7 +460,6 @@ INSTALL_FLOW:
 			if errDeps != nil {
 				fmt.Println("Aviso: Falha ao instalar dependências do SUSE ou cancelado pelo usuário.")
 			}
-			
 			installCmd = "zypper --non-interactive install -y --allow-unsigned-rpm"
 		}
 
@@ -441,25 +511,6 @@ func getDistroInfo() DistroInfo {
 	info.ID = strings.ToLower(info.ID)
 	info.IDLike = strings.ToLower(info.IDLike)
 	return info
-}
-
-func ensureZenity(d DistroInfo) {
-	if _, err := exec.LookPath("zenity"); err == nil {
-		return
-	}
-	var cmd string
-	if strings.Contains(d.ID, "arch") {
-		cmd = "pacman -S --noconfirm zenity"
-	} else if strings.Contains(d.ID, "debian") {
-		cmd = "apt-get update && apt-get install -y zenity"
-	} else if strings.Contains(d.ID, "fedora") {
-		cmd = "dnf install -y zenity"
-	} else if strings.Contains(d.ID, "suse") {
-		cmd = "zypper --non-interactive install -y zenity"
-	}
-	if cmd != "" {
-		exec.Command("pkexec", "bash", "-c", cmd).Run()
-	}
 }
 
 func downloadFile(url, path string) error {
