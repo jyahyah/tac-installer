@@ -293,6 +293,8 @@ func installViaAUR(distro DistroInfo) {
 
 	tmpScript := filepath.Join(os.TempDir(), "install_tac_aur.sh")
 	
+	// Script Bash embutido
+	// Alteração: Adicionado limpeza de cache (~/.cache/yay e ~/.cache/paru) para evitar erro de Git Refs
 	scriptContent := fmt.Sprintf(`#!/bin/bash
 echo "=== INSTALAÇÃO VIA AUR: %s ==="
 echo ""
@@ -316,12 +318,16 @@ check_install() {
 # 1. Tenta usar YAY
 if command -v yay &> /dev/null; then
     echo ">> Usando YAY..."
+    # Limpa cache para evitar conflitos de git tags
+    rm -rf "$HOME/.cache/yay/%s"
     yay -S --noconfirm %s
     check_install
 
 # 2. Tenta usar PARU
 elif command -v paru &> /dev/null; then
     echo ">> Usando PARU..."
+    # FIX: Limpa cache do paru que causa o erro 'bad object refs'
+    rm -rf "$HOME/.cache/paru/%s"
     paru -S --noconfirm %s
     check_install
 
@@ -344,7 +350,7 @@ else
     makepkg -si --noconfirm
     check_install
 fi
-`, AppName, AppName, AppName, AppName, AppName, AppName, AppName)
+`, AppName, AppName, AppName, AppName, AppName, AppName, AppName, AppName, AppName, AppName)
 
 	if err := os.WriteFile(tmpScript, []byte(scriptContent), 0755); err != nil {
 		zenityError("Erro ao criar script temporário: " + err.Error())
