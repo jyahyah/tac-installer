@@ -326,9 +326,11 @@ if command -v yay &> /dev/null; then
 # 2. Tenta usar PARU
 elif command -v paru &> /dev/null; then
     echo ">> Usando PARU..."
-    # FIX: Limpa cache do paru que causa o erro 'bad object refs'
+    # FIX: Limpa cache do paru (Geralmente fica em 'clone')
+    rm -rf "$HOME/.cache/paru/clone/%s"
     rm -rf "$HOME/.cache/paru/%s"
-    paru -S --noconfirm %s
+    # --rebuild é essencial quando tags mudam upstream
+    paru -S --rebuild --noconfirm %s
     check_install
 
 # 3. Fallback: Manual
