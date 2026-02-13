@@ -18,7 +18,7 @@ const (
 	GithubUser    = "narayanls"
 
 	AppInstallDir = "/usr/share/tac-writer"
-	
+
 	SuseDeps = "typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 libadwaita-1-0 python312-dropbox python313 python313-gobject python313-reportlab python313-pygtkspellcheck python313-pyenchant python313-Pillow python313-requests python313-pypdf python313-PyLaTeX gettext-runtime liberation-fonts myspell-pt_BR myspell-en_US myspell-es"
 )
 
@@ -62,6 +62,13 @@ func getInstalledVersion() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+func removeVersionFile() {
+	os.Remove(getVersionFile())
+	// Tenta remover o diretório pai se estiver vazio
+	vFile := getVersionFile()
+	os.Remove(filepath.Dir(vFile))
 }
 
 func compareVersions(a, b string) int {
@@ -173,7 +180,6 @@ func formatDate(iso string) string {
 // --- UTILITÁRIOS GERAIS (TERMINAL E ZENITY) ---
 
 func getTerminal() (string, string) {
-	// Lista de terminais comuns
 	terms := []struct {
 		cmd string
 		arg string
@@ -200,12 +206,10 @@ func getTerminal() (string, string) {
 }
 
 func ensureZenity(d DistroInfo) {
-	// 1. Verifica se já existe
 	if _, err := exec.LookPath("zenity"); err == nil {
 		return
 	}
 
-	// 2. Se não existe, precisamos identificar o comando de instalação
 	var installCmd string
 	switch {
 	case strings.Contains(d.ID, "arch") || strings.Contains(d.IDLike, "arch") || strings.Contains(d.ID, "cachyos"):
@@ -223,14 +227,12 @@ func ensureZenity(d DistroInfo) {
 		os.Exit(1)
 	}
 
-	// 3. Obter terminal para rodar o comando interativamente
 	termCmd, termArg := getTerminal()
 	if termCmd == "" {
 		fmt.Println("Erro: Zenity não encontrado e nenhum terminal detectado para realizar a instalação.")
 		os.Exit(1)
 	}
 
-	// 4. Criar script temporário para rodar no terminal
 	tmpScript := filepath.Join(os.TempDir(), "install_zenity_dependency.sh")
 	scriptContent := fmt.Sprintf(`#!/bin/bash
 echo "=========================================="
@@ -263,24 +265,20 @@ exit $EXIT_CODE
 	}
 	defer os.Remove(tmpScript)
 
-	// 5. Executa o terminal e espera terminar
 	cmd := exec.Command(termCmd, termArg, tmpScript)
-	cmd.Run() // Ignoramos erro do Run() pois o script trata a saída
+	cmd.Run()
 
-	// 6. Verificação final
 	if _, err := exec.LookPath("zenity"); err != nil {
 		fmt.Println("Zenity ainda não foi encontrado. A instalação falhou ou foi cancelada.")
 		os.Exit(1)
 	}
-	// Se chegou aqui, Zenity existe. O programa segue para o main.
 }
 
 // --- FUNÇÕES AUR ---
 
 func installViaAUR(distro DistroInfo) {
-	// AVISO: Aqui Zenity já é garantido pelo ensureZenity chamado no main
 	msg := fmt.Sprintf("Sistema <b>Arch Linux</b> detectado.\n\nO <b>%s</b> será instalado diretamente do <b>AUR</b> para resolver as dependências automaticamente.\n\nIsso abrirá um terminal para compilação.\nDeseja continuar?", AppPrettyName)
-	
+
 	if !zenityQuestion(msg) {
 		os.Exit(0)
 	}
@@ -292,9 +290,7 @@ func installViaAUR(distro DistroInfo) {
 	}
 
 	tmpScript := filepath.Join(os.TempDir(), "install_tac_aur.sh")
-	
-	// Script Bash embutido
-	// Alteração: Adicionado limpeza de cache (~/.cache/yay e ~/.cache/paru) para evitar erro de Git Refs
+
 	scriptContent := fmt.Sprintf(`#!/bin/bash
 echo "=== INSTALAÇÃO VIA AUR: %s ==="
 echo ""
@@ -318,7 +314,6 @@ check_install() {
 # 1. Tenta usar YAY
 if command -v yay &> /dev/null; then
     echo ">> Usando YAY..."
-    # Limpa cache para evitar conflitos de git tags
     rm -rf "$HOME/.cache/yay/%s"
     yay -S --noconfirm %s
     check_install
@@ -326,10 +321,8 @@ if command -v yay &> /dev/null; then
 # 2. Tenta usar PARU
 elif command -v paru &> /dev/null; then
     echo ">> Usando PARU..."
-    # FIX: Limpa cache do paru (Geralmente fica em 'clone')
     rm -rf "$HOME/.cache/paru/clone/%s"
     rm -rf "$HOME/.cache/paru/%s"
-    # --rebuild é essencial quando tags mudam upstream
     paru -S --rebuild --noconfirm %s
     check_install
 
@@ -373,54 +366,129 @@ fi
 	os.Exit(0)
 }
 
-// --- MAIN E OUTROS ---
+// --- DESINSTALAÇÃO ---
+
+func getUninstallCmd(distro DistroInfo) string {
+	switch {
+	case strings.Contains(distro.ID, "arch") || strings.Contains(distro.IDLike, "arch") ||
+		strings.Contains(distro.ID, "cachyos") || strings.Contains(distro.ID, "manjaro") ||
+		strings.Contains(distro.IDLike, "manjaro"):
+		return "pacman -Rns --noconfirm " + AppName
+	case strings.Contains(distro.ID, "debian") || strings.Contains(distro.IDLike, "debian") ||
+		strings.Contains(distro.ID, "ubuntu"):
+		return "apt remove -y " + AppName
+	case strings.Contains(distro.ID, "fedora") || strings.Contains(distro.IDLike, "fedora"):
+		return "dnf remove -y " + AppName
+	case strings.Contains(distro.ID, "suse") || strings.Contains(distro.IDLike, "suse"):
+		return "zypper --non-interactive remove -y " + AppName
+	}
+	return ""
+}
+
+func uninstallPackage(distro DistroInfo) bool {
+	cmd := getUninstallCmd(distro)
+	if cmd == "" {
+		zenityError("Não foi possível determinar o comando de desinstalação para sua distribuição.")
+		return false
+	}
+	fullCmd := fmt.Sprintf("pkexec %s", cmd)
+	return exec.Command("bash", "-c", fullCmd).Run() == nil
+}
+
+func handleUninstall(distro DistroInfo) {
+	if !zenityQuestionCustomTitle(
+		"Tem certeza que deseja desinstalar o <b>"+AppPrettyName+"</b>?\n\nO aplicativo será removido do sistema.",
+		"Confirmar desinstalação",
+	) {
+		return
+	}
+
+	if uninstallPackage(distro) {
+		removeVersionFile()
+		zenityInfo("O <b>" + AppPrettyName + "</b> foi desinstalado com sucesso.")
+	} else {
+		zenityError("Falha na desinstalação ou operação cancelada pelo usuário.")
+	}
+}
+
+// --- MAIN ---
 
 func main() {
 	distro := getDistroInfo()
-	
-	// AQUI: Garante Zenity antes de qualquer chamada gráfica
+
 	ensureZenity(distro)
 
 	if checkIsInstalled() {
 		release, err := getLatestRelease(GithubUser, AppName)
+
+		// Se não conseguiu consultar o GitHub, ainda oferece abrir/desinstalar
 		if err != nil {
-			zenityError("Erro ao verificar atualizações:\n" + err.Error())
-			os.Exit(1)
-		}
-
-		latest := strings.TrimPrefix(release.TagName, "v")
-		installed, err := getInstalledVersion()
-		
-		if (installed == "" || err != nil) && strings.Contains(distro.ID, "arch") {
-			out, _ := exec.Command("pacman", "-Q", AppName).Output()
-			parts := strings.Fields(string(out))
-			if len(parts) >= 2 {
-				installed = parts[1]
-				err = nil
-			}
-		}
-
-		needsUpdate := true
-		if err == nil && compareVersions(installed, latest) >= 0 {
-			needsUpdate = false
-		}
-
-		if needsUpdate {
-			msg := fmt.Sprintf(
-				"Atualização disponível\n\n<b>Versão instalada</b>: %s\n<b>Versão nova</b>: %s\n\nDeseja atualizar?",
-				installed, latest,
+			choice := zenityTripleChoice(
+				"O <b>"+AppPrettyName+"</b> está instalado.\n\nNão foi possível verificar atualizações:\n<small>"+err.Error()+"</small>",
+				AppPrettyName,
+				"Abrir", "Desinstalar", "Fechar",
 			)
-			if zenityQuestionCustomTitle(msg, "Atualizar o "+AppPrettyName) {
-				goto INSTALL_FLOW
+			switch choice {
+			case "ok":
+				openApplication()
+			case "extra":
+				handleUninstall(distro)
 			}
 			os.Exit(0)
 		}
 
-		if zenityQuestionCustomTitle(
-			"O <b>"+AppPrettyName+"</b> já está instalado e atualizado.\n\nDeseja abrir?",
-			"Abrir",
-		) {
+		latest := strings.TrimPrefix(release.TagName, "v")
+		installed, verErr := getInstalledVersion()
+
+		if (installed == "" || verErr != nil) && strings.Contains(distro.ID, "arch") {
+			out, _ := exec.Command("pacman", "-Q", AppName).Output()
+			parts := strings.Fields(string(out))
+			if len(parts) >= 2 {
+				installed = parts[1]
+				verErr = nil
+			}
+		}
+
+		needsUpdate := true
+		if verErr == nil && compareVersions(installed, latest) >= 0 {
+			needsUpdate = false
+		}
+
+		if needsUpdate {
+			if installed == "" {
+				installed = "(desconhecida)"
+			}
+			msg := fmt.Sprintf(
+				"Atualização disponível!\n\n<b>Versão instalada</b>: %s\n<b>Versão nova</b>: %s",
+				installed, latest,
+			)
+			choice := zenityTripleChoice(msg, AppPrettyName, "Atualizar", "Desinstalar", "Fechar")
+			switch choice {
+			case "ok":
+				goto INSTALL_FLOW
+			case "extra":
+				handleUninstall(distro)
+				os.Exit(0)
+			default:
+				os.Exit(0)
+			}
+		}
+
+		// Está atualizado
+		displayVersion := installed
+		if displayVersion == "" {
+			displayVersion = latest
+		}
+		choice := zenityTripleChoice(
+			"O <b>"+AppPrettyName+"</b> já está instalado e atualizado.\n\n<b>Versão</b>: "+displayVersion,
+			AppPrettyName,
+			"Abrir", "Desinstalar", "Fechar",
+		)
+		switch choice {
+		case "ok":
 			openApplication()
+		case "extra":
+			handleUninstall(distro)
 		}
 		os.Exit(0)
 	}
@@ -449,15 +517,19 @@ INSTALL_FLOW:
 	var suffix, installCmd string
 
 	switch {
-	case strings.Contains(distro.ID, "arch") || strings.Contains(distro.IDLike, "arch") || strings.Contains(distro.IDLike, "manjaro") || strings.Contains(distro.ID, "manjaro") || strings.Contains(distro.ID, "cachyos"):
+	case strings.Contains(distro.ID, "arch") || strings.Contains(distro.IDLike, "arch") ||
+		strings.Contains(distro.IDLike, "manjaro") || strings.Contains(distro.ID, "manjaro") ||
+		strings.Contains(distro.ID, "cachyos"):
 		installViaAUR(distro)
-		return 
+		return
 
-	case strings.Contains(distro.ID, "debian") || strings.Contains(distro.IDLike, "debian") || strings.Contains(distro.ID, "ubuntu"):
+	case strings.Contains(distro.ID, "debian") || strings.Contains(distro.IDLike, "debian") ||
+		strings.Contains(distro.ID, "ubuntu"):
 		suffix = ".deb"
 		installCmd = "apt install -y"
 
-	case strings.Contains(distro.ID, "fedora") || strings.Contains(distro.IDLike, "fedora") || strings.Contains(distro.IDLike, "bazzite") || strings.Contains(distro.ID, "bazzite") ||
+	case strings.Contains(distro.ID, "fedora") || strings.Contains(distro.IDLike, "fedora") ||
+		strings.Contains(distro.IDLike, "bazzite") || strings.Contains(distro.ID, "bazzite") ||
 		strings.Contains(distro.ID, "suse") || strings.Contains(distro.IDLike, "suse"):
 		suffix = ".rpm"
 		installCmd = "dnf install -y"
@@ -534,6 +606,8 @@ func installPackage(cmd, file string) bool {
 	return exec.Command("bash", "-c", c).Run() == nil
 }
 
+// --- ZENITY HELPERS ---
+
 func zenityQuestion(text string) bool {
 	return zenityQuestionCustomTitle(text, "Instalador do "+AppPrettyName)
 }
@@ -544,4 +618,38 @@ func zenityQuestionCustomTitle(text, title string) bool {
 
 func zenityError(text string) {
 	exec.Command("zenity", "--error", "--text="+text, "--width=400").Run()
+}
+
+func zenityInfo(text string) {
+	exec.Command("zenity", "--info", "--text="+text, "--width=400").Run()
+}
+
+// zenityTripleChoice exibe um diálogo com 3 opções usando --extra-button.
+// Retorna "ok" (botão primário), "extra" (botão extra) ou "cancel" (fechar/cancelar).
+func zenityTripleChoice(text, title, okLabel, extraLabel, cancelLabel string) string {
+	cmd := exec.Command("zenity", "--question",
+		"--title="+title,
+		"--text="+text,
+		"--ok-label="+okLabel,
+		"--cancel-label="+cancelLabel,
+		"--extra-button="+extraLabel,
+		"--width=500",
+	)
+
+	out, err := cmd.Output()
+	output := strings.TrimSpace(string(out))
+
+	// Quando o usuário clica no extra-button, o zenity imprime
+	// o label do botão em stdout e sai com código 1.
+	if output == extraLabel {
+		return "extra"
+	}
+
+	// Código 0 = botão OK
+	if err == nil {
+		return "ok"
+	}
+
+	// Código 1 sem output = Cancel ou fechou a janela
+	return "cancel"
 }
