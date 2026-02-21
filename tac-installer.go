@@ -16,6 +16,7 @@ const (
 	AppName       = "tac-writer"
 	AppPrettyName = "TAC Writer"
 	GithubUser    = "narayanls"
+	FlatpakID     = "io.github.narayanls.tacwriter"
 
 	AppInstallDir = "/usr/share/tac-writer"
 
@@ -38,7 +39,7 @@ type GithubRelease struct {
 	Name        string        `json:"name"`
 	Body        string        `json:"body"`
 	PublishedAt string        `json:"published_at"`
-	Assets      []GithubAsset `json:"assets"`
+	Assets[]GithubAsset `json:"assets"`
 }
 
 func getVersionFile() string {
@@ -53,7 +54,7 @@ func writeInstalledVersion(version string) {
 	_ = os.MkdirAll(AppInstallDir, 0755)
 	vFile := getVersionFile()
 	_ = os.MkdirAll(filepath.Dir(vFile), 0755)
-	_ = os.WriteFile(vFile, []byte(version), 0644)
+	_ = os.WriteFile(vFile,[]byte(version), 0644)
 }
 
 func getInstalledVersion() (string, error) {
@@ -66,7 +67,6 @@ func getInstalledVersion() (string, error) {
 
 func removeVersionFile() {
 	os.Remove(getVersionFile())
-	// Tenta remover o diretório pai se estiver vazio
 	vFile := getVersionFile()
 	os.Remove(filepath.Dir(vFile))
 }
@@ -102,6 +102,11 @@ func compareVersions(a, b string) int {
 }
 
 func checkIsInstalled() bool {
+	// 1. Verifica Flatpak
+	if err := exec.Command("flatpak", "info", FlatpakID).Run(); err == nil {
+		return true
+	}
+	// 2. Verifica Nativo
 	if _, err := exec.LookPath("tac-writer"); err == nil {
 		return true
 	}
@@ -111,6 +116,11 @@ func checkIsInstalled() bool {
 }
 
 func openApplication() {
+	// Dá preferência para rodar Flatpak se estiver instalado, senão Nativo
+	if err := exec.Command("flatpak", "info", FlatpakID).Run(); err == nil {
+		exec.Command("flatpak", "run", FlatpakID).Start()
+		return
+	}
 	cmd := exec.Command("tac-writer")
 	if err := cmd.Start(); err != nil {
 		exec.Command("python3", filepath.Join(AppInstallDir, "main.py")).Start()
@@ -164,7 +174,7 @@ func formatReleaseNotes(body string) string {
 		return "Nenhuma descrição fornecida."
 	}
 	if len(body) > 1000 {
-		body = body[:1000] + "\n\n... (ver mais no GitHub)"
+		body = body + "\n\n... (ver mais no GitHub)"
 	}
 	return body
 }
@@ -180,7 +190,7 @@ func formatDate(iso string) string {
 // --- UTILITÁRIOS GERAIS (TERMINAL E ZENITY) ---
 
 func getTerminal() (string, string) {
-	terms := []struct {
+	terms :=[]struct {
 		cmd string
 		arg string
 	}{
@@ -259,7 +269,7 @@ fi
 exit $EXIT_CODE
 `, installCmd, installCmd)
 
-	if err := os.WriteFile(tmpScript, []byte(scriptContent), 0755); err != nil {
+	if err := os.WriteFile(tmpScript,[]byte(scriptContent), 0755); err != nil {
 		fmt.Println("Erro ao criar script de instalação do Zenity:", err)
 		os.Exit(1)
 	}
@@ -276,8 +286,12 @@ exit $EXIT_CODE
 
 // --- FUNÇÕES AUR ---
 
-func installViaAUR(distro DistroInfo) {
-	msg := fmt.Sprintf("Sistema <b>Arch Linux</b> detectado.\n\nO <b>%s</b> será instalado diretamente do <b>AUR</b> para resolver as dependências automaticamente.\n\nIsso abrirá um terminal para compilação.\nDeseja continuar?", AppPrettyName)
+func installViaAUR(distro DistroInfo, version string) {
+	msg := fmt.Sprintf(
+		"Sistema <b>Arch Linux</b> detectado.\n\n"+
+			"O <b>%s</b> será instalado diretamente do <b>AUR</b> para resolver as dependências automaticamente.\n\n"+
+			"Isso abrirá um terminal para compilação.\n"+
+			"Deseja continuar?", AppPrettyName)
 
 	if !zenityQuestion(msg) {
 		os.Exit(0)
@@ -347,7 +361,7 @@ else
 fi
 `, AppName, AppName, AppName, AppName, AppName, AppName, AppName, AppName, AppName, AppName)
 
-	if err := os.WriteFile(tmpScript, []byte(scriptContent), 0755); err != nil {
+	if err := os.WriteFile(tmpScript,[]byte(scriptContent), 0755); err != nil {
 		zenityError("Erro ao criar script temporário: " + err.Error())
 		os.Exit(1)
 	}
@@ -357,6 +371,7 @@ fi
 		zenityError("Erro ao abrir o terminal: " + err.Error())
 	} else {
 		if checkIsInstalled() {
+			writeInstalledVersion(version)
 			if zenityQuestionCustomTitle("Instalação do AUR finalizada.\nDeseja abrir agora?", "Sucesso") {
 				openApplication()
 			}
@@ -386,13 +401,24 @@ func getUninstallCmd(distro DistroInfo) string {
 }
 
 func uninstallPackage(distro DistroInfo) bool {
-	cmd := getUninstallCmd(distro)
-	if cmd == "" {
-		zenityError("Não foi possível determinar o comando de desinstalação para sua distribuição.")
-		return false
+	uninstalledAny := false
+
+	// Tenta remover o Flatpak (se existir)
+	if err := exec.Command("flatpak", "info", FlatpakID).Run(); err == nil {
+		exec.Command("flatpak", "uninstall", "-y", FlatpakID).Run()
+		uninstalledAny = true
 	}
-	fullCmd := fmt.Sprintf("pkexec %s", cmd)
-	return exec.Command("bash", "-c", fullCmd).Run() == nil
+
+	// Tenta remover pacote Nativo
+	cmd := getUninstallCmd(distro)
+	if cmd != "" {
+		fullCmd := fmt.Sprintf("pkexec %s", cmd)
+		if exec.Command("bash", "-c", fullCmd).Run() == nil {
+			uninstalledAny = true
+		}
+	}
+
+	return uninstalledAny
 }
 
 func handleUninstall(distro DistroInfo) {
@@ -411,6 +437,24 @@ func handleUninstall(distro DistroInfo) {
 	}
 }
 
+// --- FUNÇÃO PARA ESCOLHA DO FORMATO DE INSTALAÇÃO ---
+
+func chooseInstallFormat() string {
+	msg := "<b>Como você prefere instalar o pacote?</b>\n\n" +
+		"<b>• Nativo:</b> Recomendado (.deb, .rpm, AUR). Melhor integração.\n" +
+		"<b>• Flatpak:</b> Universal. Roda isolado em Sandbox e não afeta o sistema base."
+
+	choice := zenityTripleChoice(msg, "Formato de Instalação", "Nativo", "Flatpak", "Cancelar")
+	switch choice {
+	case "ok":
+		return "Nativo"
+	case "extra":
+		return "Flatpak"
+	default:
+		return ""
+	}
+}
+
 // --- MAIN ---
 
 func main() {
@@ -421,7 +465,6 @@ func main() {
 	if checkIsInstalled() {
 		release, err := getLatestRelease(GithubUser, AppName)
 
-		// Se não conseguiu consultar o GitHub, ainda oferece abrir/desinstalar
 		if err != nil {
 			choice := zenityTripleChoice(
 				"O <b>"+AppPrettyName+"</b> está instalado.\n\nNão foi possível verificar atualizações:\n<small>"+err.Error()+"</small>",
@@ -444,7 +487,11 @@ func main() {
 			out, _ := exec.Command("pacman", "-Q", AppName).Output()
 			parts := strings.Fields(string(out))
 			if len(parts) >= 2 {
-				installed = parts[1]
+				installed = parts [1]
+				// Remove a "epoch" (ex: "1:1.3.1.4-1" vira "1.3.1.4-1")
+				if idx := strings.Index(installed, ":"); idx != -1 {
+					installed = installed[idx+1:]
+				}
 				verErr = nil
 			}
 		}
@@ -474,7 +521,6 @@ func main() {
 			}
 		}
 
-		// Está atualizado
 		displayVersion := installed
 		if displayVersion == "" {
 			displayVersion = latest
@@ -514,38 +560,63 @@ INSTALL_FLOW:
 		os.Exit(0)
 	}
 
+	// Solicita o formato de instalação para o usuário
+	formatChoice := chooseInstallFormat()
+	if formatChoice == "" {
+		os.Exit(0)
+	}
+
 	var suffix, installCmd string
+	var needsRoot bool
 
-	switch {
-	case strings.Contains(distro.ID, "arch") || strings.Contains(distro.IDLike, "arch") ||
-		strings.Contains(distro.IDLike, "manjaro") || strings.Contains(distro.ID, "manjaro") ||
-		strings.Contains(distro.ID, "cachyos"):
-		installViaAUR(distro)
-		return
-
-	case strings.Contains(distro.ID, "debian") || strings.Contains(distro.IDLike, "debian") ||
-		strings.Contains(distro.ID, "ubuntu"):
-		suffix = ".deb"
-		installCmd = "apt install -y"
-
-	case strings.Contains(distro.ID, "fedora") || strings.Contains(distro.IDLike, "fedora") ||
-		strings.Contains(distro.IDLike, "bazzite") || strings.Contains(distro.ID, "bazzite") ||
-		strings.Contains(distro.ID, "suse") || strings.Contains(distro.IDLike, "suse"):
-		suffix = ".rpm"
-		installCmd = "dnf install -y"
-
-		if strings.Contains(distro.ID, "suse") || strings.Contains(distro.IDLike, "suse") {
-			cmdDeps := fmt.Sprintf("pkexec zypper --non-interactive install -y %s", SuseDeps)
-			errDeps := exec.Command("bash", "-c", cmdDeps).Run()
-			if errDeps != nil {
-				fmt.Println("Aviso: Falha ao instalar dependências do SUSE ou cancelado pelo usuário.")
-			}
-			installCmd = "zypper --non-interactive install -y --allow-unsigned-rpm"
+	if formatChoice == "Flatpak" {
+		if _, err := exec.LookPath("flatpak"); err != nil {
+			zenityError("O comando 'flatpak' não foi encontrado. Por favor, instale o suporte a Flatpak na sua distribuição para continuar.")
+			os.Exit(1)
 		}
+		
+		// --- A MÁGICA ENTRA AQUI ---
+		// Garante que o repositório do Flathub exista para o usuário antes de instalar
+		// Assim ele sabe de onde baixar o org.gnome.Platform automaticamente
+		exec.Command("flatpak", "remote-add", "--user", "--if-not-exists", "flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo").Run()
+		
+		suffix = ".flatpak"
+		installCmd = "flatpak install --user -y"
+		needsRoot = false
+	} else {
+		// Logica para formato Nativo
+		needsRoot = true
+		switch {
+		case strings.Contains(distro.ID, "arch") || strings.Contains(distro.IDLike, "arch") ||
+			strings.Contains(distro.IDLike, "manjaro") || strings.Contains(distro.ID, "manjaro") ||
+			strings.Contains(distro.ID, "cachyos"):
+			installViaAUR(distro, version)
+			return
 
-	default:
-		zenityError("Distribuição não suportada")
-		os.Exit(1)
+		case strings.Contains(distro.ID, "debian") || strings.Contains(distro.IDLike, "debian") ||
+			strings.Contains(distro.ID, "ubuntu"):
+			suffix = ".deb"
+			installCmd = "apt install -y"
+
+		case strings.Contains(distro.ID, "fedora") || strings.Contains(distro.IDLike, "fedora") ||
+			strings.Contains(distro.IDLike, "bazzite") || strings.Contains(distro.ID, "bazzite") ||
+			strings.Contains(distro.ID, "suse") || strings.Contains(distro.IDLike, "suse"):
+			suffix = ".rpm"
+			installCmd = "dnf install -y"
+
+			if strings.Contains(distro.ID, "suse") || strings.Contains(distro.IDLike, "suse") {
+				cmdDeps := fmt.Sprintf("pkexec zypper --non-interactive install -y %s", SuseDeps)
+				errDeps := exec.Command("bash", "-c", cmdDeps).Run()
+				if errDeps != nil {
+					fmt.Println("Aviso: Falha ao instalar dependências do SUSE ou cancelado pelo usuário.")
+				}
+				installCmd = "zypper --non-interactive install -y --allow-unsigned-rpm"
+			}
+
+		default:
+			zenityError("Distribuição não suportada para o modo Nativo. Tente via Flatpak.")
+			os.Exit(1)
+		}
 	}
 
 	fileName, url, err := findAssetUrl(release, suffix)
@@ -560,7 +631,7 @@ INSTALL_FLOW:
 		os.Exit(1)
 	}
 
-	if installPackage(installCmd, tmp) {
+	if installPackage(installCmd, tmp, needsRoot) {
 		writeInstalledVersion(version)
 		if zenityQuestionCustomTitle("Instalação concluída!\nDeseja abrir agora?", "Sucesso") {
 			openApplication()
@@ -601,9 +672,52 @@ func downloadFile(url, path string) error {
 	return exec.Command("bash", "-c", cmd).Run()
 }
 
-func installPackage(cmd, file string) bool {
-	c := fmt.Sprintf("pkexec %s '%s'", cmd, file)
-	return exec.Command("bash", "-c", c).Run() == nil
+func installPackage(cmd, file string, needsRoot bool) bool {
+	var c string
+	if needsRoot {
+		c = fmt.Sprintf("pkexec %s '%s'", cmd, file)
+	} else {
+		c = fmt.Sprintf("%s '%s'", cmd, file)
+	}
+	
+	// --- MÁGICA DA UX: Abre a janela de carregamento em segundo plano ---
+	zenityCmd := exec.Command("zenity", "--progress", "--pulsate", 
+		"--title=Instalando...", 
+		"--text=Instalando o TAC Writer...\n\nPor favor, aguarde. O processo está em andamento e pode levar alguns minutos caso seja necessário baixar dependências.", 
+		"--auto-close", "--no-cancel", "--width=450")
+	
+	// Mantemos o canal de entrada aberto para a janela não fechar sozinha
+	zenityStdin, _ := zenityCmd.StdinPipe()
+	zenityCmd.Start()
+
+	// --- EXECUTA A INSTALAÇÃO REAL AQUI ---
+	out, err := exec.Command("bash", "-c", c).CombinedOutput()
+
+	// --- FECHA A JANELA DE CARREGAMENTO ---
+	if zenityStdin != nil {
+		zenityStdin.Close() // Manda sinal para o zenity parar
+	}
+	if zenityCmd.Process != nil {
+		zenityCmd.Process.Kill() // Garante que a janela suma da tela imediatamente
+	}
+
+	// --- TRATAMENTO DE ERROS ---
+	if err != nil {
+		errMsg := strings.TrimSpace(string(out))
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		
+		errMsg = strings.ReplaceAll(errMsg, "<", "&lt;")
+		errMsg = strings.ReplaceAll(errMsg, ">", "&gt;")
+		
+		textoErro := fmt.Sprintf("<b>Erro detalhado retornado pelo sistema:</b>\n\n<span size='small'>%s</span>", errMsg)
+		exec.Command("zenity", "--error", "--title=Erro de Instalação", "--text="+textoErro, "--width=650").Run()
+		
+		return false
+	}
+	
+	return true
 }
 
 // --- ZENITY HELPERS ---
@@ -624,8 +738,6 @@ func zenityInfo(text string) {
 	exec.Command("zenity", "--info", "--text="+text, "--width=400").Run()
 }
 
-// zenityTripleChoice exibe um diálogo com 3 opções usando --extra-button.
-// Retorna "ok" (botão primário), "extra" (botão extra) ou "cancel" (fechar/cancelar).
 func zenityTripleChoice(text, title, okLabel, extraLabel, cancelLabel string) string {
 	cmd := exec.Command("zenity", "--question",
 		"--title="+title,
@@ -639,17 +751,13 @@ func zenityTripleChoice(text, title, okLabel, extraLabel, cancelLabel string) st
 	out, err := cmd.Output()
 	output := strings.TrimSpace(string(out))
 
-	// Quando o usuário clica no extra-button, o zenity imprime
-	// o label do botão em stdout e sai com código 1.
 	if output == extraLabel {
 		return "extra"
 	}
 
-	// Código 0 = botão OK
 	if err == nil {
 		return "ok"
 	}
 
-	// Código 1 sem output = Cancel ou fechou a janela
 	return "cancel"
 }
