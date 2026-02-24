@@ -14,7 +14,7 @@ import (
 
 const (
 	AppName       = "tac-writer"
-	AppPrettyName = "TAC Writer"
+	AppPrettyName = "Tac Writer"
 	GithubUser    = "narayanls"
 	FlatpakID     = "io.github.narayanls.tacwriter"
 
@@ -683,7 +683,7 @@ func installPackage(cmd, file string, needsRoot bool) bool {
 	// --- MÁGICA DA UX: Abre a janela de carregamento em segundo plano ---
 	zenityCmd := exec.Command("zenity", "--progress", "--pulsate", 
 		"--title=Instalando...", 
-		"--text=Instalando o TAC Writer...\n\nPor favor, aguarde. O processo está em andamento e pode levar alguns minutos caso seja necessário baixar dependências.", 
+		"--text=Instalando o Tac Writer...\n\nPor favor, aguarde. O processo está em andamento e pode levar alguns minutos caso seja necessário baixar dependências.", 
 		"--auto-close", "--no-cancel", "--width=450")
 	
 	// Mantemos o canal de entrada aberto para a janela não fechar sozinha
